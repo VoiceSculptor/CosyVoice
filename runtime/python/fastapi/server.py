@@ -26,6 +26,15 @@ sys.path.append('{}/../../..'.format(ROOT_DIR))
 sys.path.append('{}/../../../third_party/Matcha-TTS'.format(ROOT_DIR))
 from cosyvoice.cli.cosyvoice import AutoModel
 from cosyvoice.utils.file_utils import load_wav
+import tempfile
+import shutil
+
+
+def save_upload(prompt_wav):
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    shutil.copyfileobj(prompt_wav.file, tmp)
+    tmp.close()
+    return tmp.name
 
 app = FastAPI()
 # set cross region allowance
@@ -53,16 +62,16 @@ async def inference_sft(tts_text: str = Form(), spk_id: str = Form()):
 @app.get("/inference_zero_shot")
 @app.post("/inference_zero_shot")
 async def inference_zero_shot(tts_text: str = Form(), prompt_text: str = Form(), prompt_wav: UploadFile = File()):
-    prompt_speech_16k = load_wav(prompt_wav.file, 16000)
-    model_output = cosyvoice.inference_zero_shot(tts_text, prompt_text, prompt_speech_16k)
+    prompt_path = save_upload(prompt_wav)
+    model_output = cosyvoice.inference_zero_shot(tts_text, prompt_text, prompt_path)
     return StreamingResponse(generate_data(model_output))
 
 
 @app.get("/inference_cross_lingual")
 @app.post("/inference_cross_lingual")
 async def inference_cross_lingual(tts_text: str = Form(), prompt_wav: UploadFile = File()):
-    prompt_speech_16k = load_wav(prompt_wav.file, 16000)
-    model_output = cosyvoice.inference_cross_lingual(tts_text, prompt_speech_16k)
+    prompt_path = save_upload(prompt_wav)
+    model_output = cosyvoice.inference_cross_lingual(tts_text, prompt_path)
     return StreamingResponse(generate_data(model_output))
 
 
@@ -76,10 +85,24 @@ async def inference_instruct(tts_text: str = Form(), spk_id: str = Form(), instr
 @app.get("/inference_instruct2")
 @app.post("/inference_instruct2")
 async def inference_instruct2(tts_text: str = Form(), instruct_text: str = Form(), prompt_wav: UploadFile = File()):
-    prompt_speech_16k = load_wav(prompt_wav.file, 16000)
-    model_output = cosyvoice.inference_instruct2(tts_text, instruct_text, prompt_speech_16k)
+    prompt_path = save_upload(prompt_wav)
+    model_output = cosyvoice.inference_instruct2(tts_text, instruct_text, prompt_path)
     return StreamingResponse(generate_data(model_output))
 
+
+@app.get("/add_zero_shot_spk")
+@app.post("/add_zero_shot_spk")
+async def add_zero_shot_spk(spk_id: str = Form(), prompt_text: str = Form(), prompt_wav: UploadFile = File()):
+    prompt_path = save_upload(prompt_wav)
+    ok = cosyvoice.add_zero_shot_spk(prompt_text, prompt_path, spk_id)
+    return {"ok": bool(ok), "spk_id": spk_id, "spks": cosyvoice.list_available_spks()}
+
+
+@app.get("/inference_zero_shot_spk")
+@app.post("/inference_zero_shot_spk")
+async def inference_zero_shot_spk(tts_text: str = Form(), spk_id: str = Form()):
+    model_output = cosyvoice.inference_zero_shot(tts_text, '', '', zero_shot_spk_id=spk_id)
+    return StreamingResponse(generate_data(model_output))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
