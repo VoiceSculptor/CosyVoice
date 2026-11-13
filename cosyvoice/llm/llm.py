@@ -18,6 +18,7 @@ import time
 import threading
 from typing import Dict, Optional, Callable, List, Generator
 import numpy as np
+import os
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -227,6 +228,13 @@ class Qwen2Encoder(torch.nn.Module):
     def __init__(self, pretrain_path):
         super().__init__()
         self.model = Qwen2ForCausalLM.from_pretrained(pretrain_path)
+        # LoRA: 通过环境变量启用（训练用 COSYVOICE_LORA=1，推理无需）
+        if os.environ.get('COSYVOICE_LORA', '0') == '1':
+            from cosyvoice.llm.lora import inject_lora, count_trainable
+            n = inject_lora(self.model, int(os.environ.get('LORA_R', '16')),
+                            int(os.environ.get('LORA_ALPHA', '32')))
+            tr, tot = count_trainable(self.model)
+            print(f'[LoRA] injected {n} layers, trainable {tr}/{tot} params')
 
     def forward(self, xs: torch.Tensor, xs_lens: torch.Tensor):
         T = xs.size(1)

@@ -21,7 +21,10 @@ from copy import deepcopy
 import os
 import torch
 import torch.distributed as dist
-import deepspeed
+try:
+    import deepspeed
+except ImportError:
+    deepspeed = None
 
 from hyperpyyaml import load_hyperpyyaml
 
@@ -89,7 +92,7 @@ def get_args():
                         default=60,
                         type=int,
                         help='timeout (in seconds) of cosyvoice_join.')
-    parser = deepspeed.add_config_arguments(parser)
+    parser = deepspeed.add_config_arguments(parser) if deepspeed is not None else parser
     args = parser.parse_args()
     return args
 
@@ -103,7 +106,15 @@ def main():
     # gan train has some special initialization logic
     gan = True if args.model == 'hifigan' else False
 
-    override_dict = {k: None for k in ['llm', 'flow', 'hift', 'hifigan'] if k != args.model}
+    _avail = ['llm', 'flow', 'hift', 'hifigan']
+    try:
+        import re as _re
+        with open(args.config, 'r', encoding='utf-8') as _f:
+            _txt = _f.read()
+        _avail = [k for k in _avail if _re.search(r'^' + k + ':', _txt, _re.M)]
+    except Exception:
+        pass
+    override_dict = {k: None for k in _avail if k != args.model}
     if gan is True:
         override_dict.pop('hift')
     if args.qwen_pretrain_path is not None:

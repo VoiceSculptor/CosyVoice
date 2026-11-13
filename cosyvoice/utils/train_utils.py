@@ -22,7 +22,10 @@ import re
 import datetime
 import yaml
 
-import deepspeed
+try:
+    import deepspeed
+except ImportError:
+    deepspeed = None
 import torch.optim as optim
 import torch.distributed as dist
 
@@ -30,7 +33,10 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 from torch.nn.utils import clip_grad_norm_
 
-from deepspeed.runtime.zero.stage_1_and_2 import estimate_zero2_model_states_mem_needs_all_live
+try:
+    from deepspeed.runtime.zero.stage_1_and_2 import estimate_zero2_model_states_mem_needs_all_live
+except ImportError:
+    estimate_zero2_model_states_mem_needs_all_live = None
 
 from cosyvoice.dataset.dataset import Dataset
 from cosyvoice.utils.scheduler import WarmupLR, NoamHoldAnnealing, ConstantLR
@@ -111,9 +117,9 @@ def wrap_cuda_model(args, model):
 def init_optimizer_and_scheduler(args, configs, model, gan):
     if gan is False:
         if configs['train_conf']['optim'] == 'adam':
-            optimizer = optim.Adam(model.parameters(), **configs['train_conf']['optim_conf'])
+            optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), **configs['train_conf']['optim_conf'])
         elif configs['train_conf']['optim'] == 'adamw':
-            optimizer = optim.AdamW(model.parameters(), **configs['train_conf']['optim_conf'])
+            optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), **configs['train_conf']['optim_conf'])
         else:
             raise ValueError("unknown optimizer: " + configs['train_conf'])
 
@@ -222,8 +228,10 @@ def cosyvoice_join(group_join, info_dict):
     if info_dict["batch_idx"] != 0:
         # we try to join all rank in both ddp and deepspeed mode, in case different rank has different lr
         try:
-            dist.monitored_barrier(group=group_join,
-                                   timeout=group_join.options._timeout)
+            _timeout = getattr(getattr(group_join, 'options', None), '_timeout', None)
+            if not isinstance(_timeout, datetime.timedelta):
+                _timeout = datetime.timedelta(seconds=60)
+            dist.monitored_barrier(group=group_join, timeout=_timeout)
             return False
         except RuntimeError as e:
             logging.info("Detected uneven workload distribution: {}\n".format(e) +
