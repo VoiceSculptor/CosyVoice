@@ -52,56 +52,76 @@ def generate_data(model_output):
         yield tts_audio
 
 
+def stream_and_cleanup(model_output, path):
+    try:
+        yield from generate_data(model_output)
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 @app.get("/inference_sft")
 @app.post("/inference_sft")
-async def inference_sft(tts_text: str = Form(), spk_id: str = Form()):
-    model_output = cosyvoice.inference_sft(tts_text, spk_id)
+async def inference_sft(tts_text: str = Form(), spk_id: str = Form(), speed: float = Form(1.0)):
+    model_output = cosyvoice.inference_sft(tts_text, spk_id, speed=speed)
     return StreamingResponse(generate_data(model_output))
 
 
 @app.get("/inference_zero_shot")
 @app.post("/inference_zero_shot")
-async def inference_zero_shot(tts_text: str = Form(), prompt_text: str = Form(), prompt_wav: UploadFile = File()):
+async def inference_zero_shot(tts_text: str = Form(), prompt_text: str = Form(),
+                              prompt_wav: UploadFile = File(), speed: float = Form(1.0)):
     prompt_path = save_upload(prompt_wav)
-    model_output = cosyvoice.inference_zero_shot(tts_text, prompt_text, prompt_path)
-    return StreamingResponse(generate_data(model_output))
+    model_output = cosyvoice.inference_zero_shot(tts_text, prompt_text, prompt_path, speed=speed)
+    return StreamingResponse(stream_and_cleanup(model_output, prompt_path))
 
 
 @app.get("/inference_cross_lingual")
 @app.post("/inference_cross_lingual")
-async def inference_cross_lingual(tts_text: str = Form(), prompt_wav: UploadFile = File()):
+async def inference_cross_lingual(tts_text: str = Form(), prompt_wav: UploadFile = File(),
+                                  speed: float = Form(1.0)):
     prompt_path = save_upload(prompt_wav)
-    model_output = cosyvoice.inference_cross_lingual(tts_text, prompt_path)
-    return StreamingResponse(generate_data(model_output))
+    model_output = cosyvoice.inference_cross_lingual(tts_text, prompt_path, speed=speed)
+    return StreamingResponse(stream_and_cleanup(model_output, prompt_path))
 
 
 @app.get("/inference_instruct")
 @app.post("/inference_instruct")
-async def inference_instruct(tts_text: str = Form(), spk_id: str = Form(), instruct_text: str = Form()):
-    model_output = cosyvoice.inference_instruct(tts_text, spk_id, instruct_text)
+async def inference_instruct(tts_text: str = Form(), spk_id: str = Form(),
+                             instruct_text: str = Form(), speed: float = Form(1.0)):
+    model_output = cosyvoice.inference_instruct(tts_text, spk_id, instruct_text, speed=speed)
     return StreamingResponse(generate_data(model_output))
 
 
 @app.get("/inference_instruct2")
 @app.post("/inference_instruct2")
-async def inference_instruct2(tts_text: str = Form(), instruct_text: str = Form(), prompt_wav: UploadFile = File()):
+async def inference_instruct2(tts_text: str = Form(), instruct_text: str = Form(),
+                              prompt_wav: UploadFile = File(), speed: float = Form(1.0)):
     prompt_path = save_upload(prompt_wav)
-    model_output = cosyvoice.inference_instruct2(tts_text, instruct_text, prompt_path)
-    return StreamingResponse(generate_data(model_output))
+    model_output = cosyvoice.inference_instruct2(tts_text, instruct_text, prompt_path, speed=speed)
+    return StreamingResponse(stream_and_cleanup(model_output, prompt_path))
 
 
 @app.get("/add_zero_shot_spk")
 @app.post("/add_zero_shot_spk")
 async def add_zero_shot_spk(spk_id: str = Form(), prompt_text: str = Form(), prompt_wav: UploadFile = File()):
     prompt_path = save_upload(prompt_wav)
-    ok = cosyvoice.add_zero_shot_spk(prompt_text, prompt_path, spk_id)
+    try:
+        ok = cosyvoice.add_zero_shot_spk(prompt_text, prompt_path, spk_id)
+    finally:
+        try:
+            os.remove(prompt_path)
+        except OSError:
+            pass
     return {"ok": bool(ok), "spk_id": spk_id, "spks": cosyvoice.list_available_spks()}
 
 
 @app.get("/inference_zero_shot_spk")
 @app.post("/inference_zero_shot_spk")
-async def inference_zero_shot_spk(tts_text: str = Form(), spk_id: str = Form()):
-    model_output = cosyvoice.inference_zero_shot(tts_text, '', '', zero_shot_spk_id=spk_id)
+async def inference_zero_shot_spk(tts_text: str = Form(), spk_id: str = Form(), speed: float = Form(1.0)):
+    model_output = cosyvoice.inference_zero_shot(tts_text, '', '', zero_shot_spk_id=spk_id, speed=speed)
     return StreamingResponse(generate_data(model_output))
 
 if __name__ == '__main__':
@@ -115,4 +135,4 @@ if __name__ == '__main__':
                         help='local path or modelscope repo id')
     args = parser.parse_args()
     cosyvoice = AutoModel(model_dir=args.model_dir)
-    uvicorn.run(app, host="0.0.0.0", port=args.port)
+    uvicorn.run(app, host=os.environ.get('COSYVOICE_HOST', '127.0.0.1'), port=args.port)
