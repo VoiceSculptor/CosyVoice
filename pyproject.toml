@@ -29,7 +29,7 @@ dependencies = [
     "protobuf==4.25",
     "pyarrow==18.1.0",
     "pydantic==2.7.0",
-    "python-multipart==0.0.12",
+    "python-multipart==0.0.20",
     "pyworld==0.3.4",
     "rich==13.7.1",
     "setuptools<81",  # lightning 2.2.4 仍用 pkg_resources 声明命名空间，setuptools>=81 已移除
@@ -66,6 +66,8 @@ torchaudio = { index = "pytorch-cu128" }
 # linux-only 依赖（deepspeed / tensorrt-cu12* / onnxruntime-gpu）构建 sdist
 # 元数据时段言失败——这正是首次 uv sync 失败的原因。
 environments = ["sys_platform == 'win32'"]
+# gradio 5.4.0 钉死 python-multipart==0.0.12（CVE-2024-53981），强制升到修复版本
+override-dependencies = ["python-multipart>=0.0.20"]
 
 [tool.uv.extra-build-dependencies]
 openai-whisper = ["setuptools<81"]

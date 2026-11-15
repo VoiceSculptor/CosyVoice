@@ -19,6 +19,7 @@ logging.getLogger('matplotlib').setLevel(logging.WARNING)
 from fastapi import FastAPI, UploadFile, Form, File
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.background import BackgroundTask
 import uvicorn
 import numpy as np
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -32,7 +33,15 @@ import shutil
 
 def save_upload(prompt_wav):
     tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    shutil.copyfileobj(prompt_wav.file, tmp)
+    try:
+        shutil.copyfileobj(prompt_wav.file, tmp)
+    except Exception:
+        tmp.close()
+        try:
+            os.remove(tmp.name)
+        except OSError:
+            pass
+        raise
     tmp.close()
     return tmp.name
 
@@ -45,6 +54,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"])
 
+cosyvoice = None
+
+
+def _model():
+    if cosyvoice is None:
+        raise RuntimeError('模型未加载：请用 python server.py --model_dir ... 启动')
+    return cosyvoice
+
 
 def generate_data(model_output):
     for i in model_output:
@@ -52,20 +69,24 @@ def generate_data(model_output):
         yield tts_audio
 
 
+def _remove_quietly(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 def stream_and_cleanup(model_output, path):
     try:
         yield from generate_data(model_output)
     finally:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+        _remove_quietly(path)
 
 
 @app.get("/inference_sft")
 @app.post("/inference_sft")
 async def inference_sft(tts_text: str = Form(), spk_id: str = Form(), speed: float = Form(1.0)):
-    model_output = cosyvoice.inference_sft(tts_text, spk_id, speed=speed)
+    model_output = _model().inference_sft(tts_text, spk_id, speed=speed)
     return StreamingResponse(generate_data(model_output))
 
 
@@ -74,8 +95,9 @@ async def inference_sft(tts_text: str = Form(), spk_id: str = Form(), speed: flo
 async def inference_zero_shot(tts_text: str = Form(), prompt_text: str = Form(),
                               prompt_wav: UploadFile = File(), speed: float = Form(1.0)):
     prompt_path = save_upload(prompt_wav)
-    model_output = cosyvoice.inference_zero_shot(tts_text, prompt_text, prompt_path, speed=speed)
-    return StreamingResponse(stream_and_cleanup(model_output, prompt_path))
+    model_output = _model().inference_zero_shot(tts_text, prompt_text, prompt_path, speed=speed)
+    return StreamingResponse(stream_and_cleanup(model_output, prompt_path),
+                            background=BackgroundTask(_remove_quietly, prompt_path))
 
 
 @app.get("/inference_cross_lingual")
@@ -83,15 +105,16 @@ async def inference_zero_shot(tts_text: str = Form(), prompt_text: str = Form(),
 async def inference_cross_lingual(tts_text: str = Form(), prompt_wav: UploadFile = File(),
                                   speed: float = Form(1.0)):
     prompt_path = save_upload(prompt_wav)
-    model_output = cosyvoice.inference_cross_lingual(tts_text, prompt_path, speed=speed)
-    return StreamingResponse(stream_and_cleanup(model_output, prompt_path))
+    model_output = _model().inference_cross_lingual(tts_text, prompt_path, speed=speed)
+    return StreamingResponse(stream_and_cleanup(model_output, prompt_path),
+                            background=BackgroundTask(_remove_quietly, prompt_path))
 
 
 @app.get("/inference_instruct")
 @app.post("/inference_instruct")
 async def inference_instruct(tts_text: str = Form(), spk_id: str = Form(),
                              instruct_text: str = Form(), speed: float = Form(1.0)):
-    model_output = cosyvoice.inference_instruct(tts_text, spk_id, instruct_text, speed=speed)
+    model_output = _model().inference_instruct(tts_text, spk_id, instruct_text, speed=speed)
     return StreamingResponse(generate_data(model_output))
 
 
@@ -100,8 +123,9 @@ async def inference_instruct(tts_text: str = Form(), spk_id: str = Form(),
 async def inference_instruct2(tts_text: str = Form(), instruct_text: str = Form(),
                               prompt_wav: UploadFile = File(), speed: float = Form(1.0)):
     prompt_path = save_upload(prompt_wav)
-    model_output = cosyvoice.inference_instruct2(tts_text, instruct_text, prompt_path, speed=speed)
-    return StreamingResponse(stream_and_cleanup(model_output, prompt_path))
+    model_output = _model().inference_instruct2(tts_text, instruct_text, prompt_path, speed=speed)
+    return StreamingResponse(stream_and_cleanup(model_output, prompt_path),
+                            background=BackgroundTask(_remove_quietly, prompt_path))
 
 
 @app.get("/add_zero_shot_spk")
@@ -109,19 +133,19 @@ async def inference_instruct2(tts_text: str = Form(), instruct_text: str = Form(
 async def add_zero_shot_spk(spk_id: str = Form(), prompt_text: str = Form(), prompt_wav: UploadFile = File()):
     prompt_path = save_upload(prompt_wav)
     try:
-        ok = cosyvoice.add_zero_shot_spk(prompt_text, prompt_path, spk_id)
+        ok = _model().add_zero_shot_spk(prompt_text, prompt_path, spk_id)
     finally:
         try:
             os.remove(prompt_path)
         except OSError:
             pass
-    return {"ok": bool(ok), "spk_id": spk_id, "spks": cosyvoice.list_available_spks()}
+    return {"ok": bool(ok), "spk_id": spk_id, "spks": _model().list_available_spks()}
 
 
 @app.get("/inference_zero_shot_spk")
 @app.post("/inference_zero_shot_spk")
 async def inference_zero_shot_spk(tts_text: str = Form(), spk_id: str = Form(), speed: float = Form(1.0)):
-    model_output = cosyvoice.inference_zero_shot(tts_text, '', '', zero_shot_spk_id=spk_id, speed=speed)
+    model_output = _model().inference_zero_shot(tts_text, '', '', zero_shot_spk_id=spk_id, speed=speed)
     return StreamingResponse(generate_data(model_output))
 
 if __name__ == '__main__':
