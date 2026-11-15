@@ -17,7 +17,7 @@ import argparse
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 from fastapi import FastAPI, UploadFile, Form, File
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.background import BackgroundTask
 import uvicorn
@@ -83,6 +83,12 @@ def stream_and_cleanup(model_output, path):
         _remove_quietly(path)
 
 
+@app.get("/health")
+async def health():
+    m = _model()
+    return {"ok": True, "sample_rate": m.sample_rate, "fp16": bool(m.fp16)}
+
+
 @app.get("/inference_sft")
 @app.post("/inference_sft")
 async def inference_sft(tts_text: str = Form(), spk_id: str = Form(), speed: float = Form(1.0)):
@@ -145,7 +151,10 @@ async def add_zero_shot_spk(spk_id: str = Form(), prompt_text: str = Form(), pro
 @app.get("/inference_zero_shot_spk")
 @app.post("/inference_zero_shot_spk")
 async def inference_zero_shot_spk(tts_text: str = Form(), spk_id: str = Form(), speed: float = Form(1.0)):
-    model_output = _model().inference_zero_shot(tts_text, '', '', zero_shot_spk_id=spk_id, speed=speed)
+    m = _model()
+    if spk_id not in m.frontend.spk2info:
+        return JSONResponse({"ok": False, "error": "unknown spk_id"}, status_code=404)
+    model_output = m.inference_zero_shot(tts_text, '', '', zero_shot_spk_id=spk_id, speed=speed)
     return StreamingResponse(generate_data(model_output))
 
 if __name__ == '__main__':
@@ -157,6 +166,9 @@ if __name__ == '__main__':
                         type=str,
                         default='iic/CosyVoice2-0.5B',
                         help='local path or modelscope repo id')
+    parser.add_argument('--fp16',
+                        action='store_true',
+                        help='以 fp16 加载模型（仅 CUDA 下生效）')
     args = parser.parse_args()
-    cosyvoice = AutoModel(model_dir=args.model_dir)
+    cosyvoice = AutoModel(model_dir=args.model_dir, fp16=args.fp16)
     uvicorn.run(app, host=os.environ.get('COSYVOICE_HOST', '127.0.0.1'), port=args.port)
