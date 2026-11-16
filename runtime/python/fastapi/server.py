@@ -157,6 +157,58 @@ async def inference_zero_shot_spk(tts_text: str = Form(), spk_id: str = Form(), 
     model_output = m.inference_zero_shot(tts_text, '', '', zero_shot_spk_id=spk_id, speed=speed)
     return StreamingResponse(generate_data(model_output))
 
+# ------------------------------------------------------------
+# split-prompt：情绪/音色解耦（参考 IndexTTS2 思路）
+#   LLM 端用情绪参考（prompt_text + 语音 token）决定韵律/情绪，
+#   flow 端用音色参考（speech token / fbank / 说话人向量）决定音色。
+#   emo_prompt_text 必须是情绪参考音频的转录（CosyVoice3 需带 <|endofprompt|> 前缀）。
+# ------------------------------------------------------------
+_FLOW_KEYS = ('flow_prompt_speech_token', 'flow_prompt_speech_token_len',
+              'prompt_speech_feat', 'prompt_speech_feat_len', 'flow_embedding')
+
+
+def _split_prompt_gen(m, tts_text, emo_prompt_text, emo_path, spk_path, speed):
+    emo_prompt_text = m.frontend.text_normalize(emo_prompt_text, split=False, text_frontend=True)
+    spk_part = None
+    for seg in m.frontend.text_normalize(tts_text, split=True, text_frontend=True):
+        model_input = m.frontend.frontend_zero_shot(seg, emo_prompt_text, emo_path, m.sample_rate, '')
+        if spk_part is None:
+            spk_input = m.frontend.frontend_zero_shot(seg, emo_prompt_text, spk_path, m.sample_rate, '')
+            spk_part = {k: spk_input[k] for k in _FLOW_KEYS}
+        model_input.update(spk_part)
+        for out in m.model.tts(**model_input, stream=False, speed=speed):
+            yield out
+
+
+def _stream_and_cleanup2(model_output, p1, p2):
+    try:
+        yield from generate_data(model_output)
+    finally:
+        _remove_quietly(p1)
+        _remove_quietly(p2)
+
+
+def _remove_two(p1, p2):
+    _remove_quietly(p1)
+    _remove_quietly(p2)
+
+
+@app.post("/inference_split_prompt")
+async def inference_split_prompt(tts_text: str = Form(), emo_prompt_text: str = Form(),
+                                 emo_prompt_wav: UploadFile = File(), spk_prompt_wav: UploadFile = File(),
+                                 speed: float = Form(1.0)):
+    m = _model()
+    emo_path = save_upload(emo_prompt_wav)
+    try:
+        spk_path = save_upload(spk_prompt_wav)
+    except Exception:
+        _remove_quietly(emo_path)
+        raise
+    gen = _split_prompt_gen(m, tts_text, emo_prompt_text, emo_path, spk_path, speed)
+    return StreamingResponse(_stream_and_cleanup2(gen, emo_path, spk_path),
+                             background=BackgroundTask(_remove_two, emo_path, spk_path))
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port',
